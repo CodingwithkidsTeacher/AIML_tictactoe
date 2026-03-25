@@ -1,10 +1,27 @@
+# this module is used to create the game user interface
 import pygame
+# this module is used to make HTTP requests to your machine learning model
 import requests
+# this module is used to choose a random colour for the user interface and
+#  make random choices about moves the computer should make
 import random
+# this module is used to interact with your machine learning project
+from mlforkidsnumbers import MLforKidsNumbers
 
-global KEY
-KEY = "a06eeb20-28da-11ef-ab76-694d33b80521031c5e90-da98-4bb4-9629-06def8412667"
 
+project = MLforKidsNumbers(
+    # keys and URLs specific to your project will be added here
+    key="b2ad4920-5cf1-11f0-9159-2b751f0acc04da475e5a-7c29-4e25-9934-f620ac1f6d65"
+)
+
+
+
+
+############################################################################
+# Constants that match names in your Machine Learning project
+############################################################################
+
+# descriptions of the contents of a space on the game board
 EMPTY = "EMPTY"
 OPPONENT = "OPPONENT"   # for the human, the OPPONENT is the computer
                         # for the computer, the OPPONENT is the human
@@ -22,6 +39,16 @@ bottom_left = "bottom_left"
 bottom_middle = "bottom_middle"
 bottom_right = "bottom_right"
 
+#
+############################################################################
+
+
+
+
+############################################################################
+# Converting between labels and numeric values
+############################################################################
+
 # training examples refer to a location on the game board
 deconvert = {}
 deconvert[top_left] = 0
@@ -34,10 +61,19 @@ deconvert[bottom_left] = 6
 deconvert[bottom_middle] = 7
 deconvert[bottom_right] = 8
 
+
+
+
+############################################################################
+# Machine Learning functions
+############################################################################
+
 # who the two players are
 HUMAN = "HUMAN"
 COMPUTER = "COMPUTER"
 
+# Storing a record of what has happened so the computer can learn from it!
+#   contents of the board at each stage in the game
 gamehistory = {
     HUMAN : [],
     COMPUTER : []
@@ -48,73 +84,88 @@ decisions = {
     COMPUTER : []
 }
 
+
+
+# Use your machine learning model to decide where the
+#   computer should move next.
+#
+#  board :  list of board spaces with the current state of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
 def classify(board):
     debug("Predicting the next best move for the computer")
 
-    # where should the request be sent?
-    url = "https://machinelearningforkids.co.uk/api/scratch/"+ KEY + "/classify"
+    if project.has_model():
+        # get the current state of the game board
+        state = get_board_from_perspective(board, COMPUTER)
+        testvalue = {
+            "TopLeft" : state[0],
+            "TopMiddle" : state[1],
+            "TopRight" : state[2],
+            "MiddleLeft" : state[3],
+            "MiddleMiddle" : state[4],
+            "MiddleRight" : state[5],
+            "BottomLeft" : state[6],
+            "BottomMiddle" : state[7],
+            "BottomRight" : state[8]
+        }
+        # send the state of the game board to your machine learning model
+        predictions = project.classify(testvalue)
 
-    # send the state of the game board to your machine learning model
-    response = requests.get(url, params={
-        "data" : get_board_from_perspective(board, COMPUTER)
-    })
-
-    if response.ok:
-        responseData = response.json()
-      
-        for prediction in responseData:
+        # responseData will contain the list of predictions made by the
+        #  machine learning model, starting from the one with the most
+        #  confidence, to the one with the least confidence
+        for prediction in predictions:
+            # we can't make a move unless the space is empty, so
+            #  check that first
             if is_space_empty(board, prediction["class_name"]):
                 return prediction
 
-        for space in random.sample(deconvert.keys(), len(deconvert)):
-            # we can't make a move unless the space is empty, so
-            #  check that first
-            if is_space_empty(board, space):
-                return { "class_name" : space }
-    else:
-        # something went wrong - there was an error when trying to
-        #  use your ML model
-        print(response.json())
-        response.raise_for_status()
+    # If we're here, it means that we don't have a machine learning model,
+    #  or possibly none of the predictions made by the model were
+    #  actually empty!
 
+    # Pick a random space to move in
+    spaces = list(deconvert.keys())
+    for space in random.sample(spaces, len(spaces)):
+        # we can't make a move unless the space is empty, so
+        #  check that first
+        if is_space_empty(board, space):
+            return { "class_name" : space }
+
+
+
+# Add a move that resulted in a win to the training data for the
+# machine learning model
+#
+#  board         :  list of board spaces with the current state of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
+#  who           :  whose training data this is
+#      e.g.    HUMAN
+#  name_of_space :  name of the space that the move was in
+#      e.g.    bottom_left
 def add_to_train(board, who, name_of_space):
     print ("Adding the move in %s by %s to the training data" % (name_of_space, who))
 
-    url = "https://machinelearningforkids.co.uk/api/scratch/"+ KEY + "/train"
+    # convert the contents of the board into a list of whose symbol
+    #   is in that space, from the perspective of 'who'
+    #  e.g. [ PLAYER, OPPONENT, PLAYER, EMPTY, EMPTY, PLAYER, OPPONENT, PLAYER, OPPONENT ]
+    data = get_board_from_perspective(board, who)
 
-    response = requests.post(url, json={
-        # convert the contents of the board into a list of whose symbol
-        #   is in that space, from the perspective of 'who'
-        #  e.g. [ PLAYER, OPPONENT, PLAYER, EMPTY, EMPTY, PLAYER, OPPONENT, PLAYER, OPPONENT ]
-        "data" : get_board_from_perspective(board, who),
-        # the location that they chose to make a move in
-        "label" : name_of_space
-    })
+    # the location that they chose to make a move in
+    label = name_of_space
 
-    if response.ok:
-        # training data stored okay
-        pass
-    else:
-        # something went wrong
-        print(response.json())
-        response.raise_for_status()
-      
-# Train a new machine learning model using the training data
-# that has been collected so far
-def train_new_model():
-    print ("Training a new machine learning model")
+    # add move to the machine learning project training data
+    project.store(data, label)
 
-    url = "https://machinelearningforkids.co.uk/api/scratch/"+ KEY + "/models"
-    response = requests.post(url)
 
-    if response.ok:
-        # machine learning model trained successfully
-        pass
-    else:
-        # something went wrong
-        print(response.json())
-        response.raise_for_status()
 
+
+
+# Someone won the game.
+#  A machine learning model could learn from this...
+#
+#  winner          : who won - either HUMAN or COMPUTER
+#  boardhistory    : the contents of the game board at each stage in the game
 #  winnerdecisions : each of the decisions that the winner made
 def learn_from_this(winner, boardhistory, winnerdecisions):
     print("%s won the game!" % (winner))
@@ -123,9 +174,17 @@ def learn_from_this(winner, boardhistory, winnerdecisions):
         print("\nAt the start of move %d the board looked like this:" % (idx + 1))
         print(boardhistory[idx])
         print("And %s decided to put their mark in %s" % (winner, winnerdecisions[idx]))
-        add_to_train(boardhistory[idx], winner, winnerdecisions[idx])
-    train_new_model()
 
+
+############################################################################
+# Noughts and Crosses logic
+############################################################################
+
+# get the location of a space on the board (an index from 0 to 8)
+#  using the lookup table 'deconvert'
+#
+#  name_of_space :  name of the space to check
+#            e.g.    middle_right
 def get_space_location(name_of_space):
     # uses the default spelling if found
     if name_of_space in deconvert:
@@ -133,11 +192,27 @@ def get_space_location(name_of_space):
     # otherwise tries the overrides
     return deconvert[globals()[name_of_space]]
 
+
+# gets the contents of a space on the board
+#
+#  board         :  list of board spaces with the contents of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
+#  name_of_space :  name of the space to check
+#            e.g.    middle_right
 def get_space_contents(board, name_of_space):
     return board[get_space_location(name_of_space)]
 
+
+# checks to see if a specific space on the board is currently empty
+#
+#  board         :  list of board spaces with the contents of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
+#  name_of_space :  name of the space to check
+#            e.g.    middle_right
 def is_space_empty(board, name_of_space):
     return get_space_contents(board, name_of_space) == EMPTY
+
+
 
 # Creates the initial state for the game
 def create_empty_board():
@@ -146,6 +221,17 @@ def create_empty_board():
              EMPTY, EMPTY, EMPTY,
              EMPTY, EMPTY, EMPTY ]
 
+
+
+# Gets the contents of the board, from the perspective of either
+#  the human or the computer.
+#
+#  board :  list of board spaces with the current state of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
+#  who   :  either HUMAN or COMPUTER
+#
+# Returns the board described as PLAYER or OPPONENT
+#      e.g.  [ PLAYER, OPPONENT, PLAYER, EMPTY, EMPTY, PLAYER, OPPONENT, PLAYER, OPPONENT ]
 def get_board_from_perspective(board, who):
     convertedboard = []
     for move in board:
@@ -156,10 +242,17 @@ def get_board_from_perspective(board, who):
             convertedboard.append(PLAYER if move == who else OPPONENT)
     return convertedboard
 
+
+
+############################################################################
+# Noughts and Crosses user interface functions
+############################################################################
+
 # RGB colour codes
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
+
 
 game_board_coordinates = {}
 game_board_coordinates[top_left] = {
@@ -226,6 +319,16 @@ game_board_coordinates[bottom_right] = {
     "centre": (350, 350)
 }
 
+
+# Check if someone has won and draws a line to show the winner
+#   if someone has won
+#
+#  who  : Who made the last move? (only need to check if they won
+#          as a player who hasn't just made a move can't have won)
+#         e.g.   HUMAN or COMPUTER
+#
+#  Returns true if someone won
+#  Returns false if noone won
 def display_winner(screen, board, who):
     debug("Checking if %s has won" % (who))
 
@@ -271,6 +374,11 @@ def display_winner(screen, board, who):
     return gameover
 
 
+
+# Redraw the UI with a different background colour
+#
+#  board :  list of board spaces with the contents of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
 def redraw_screen(screen, colour, board):
     debug("Changing the background colour")
 
@@ -294,12 +402,16 @@ def redraw_screen(screen, colour, board):
     # refresh now we've made changes
     pygame.display.update()
 
+
+
 # Draw the crossed lines that make up a noughts and crosses board
 def draw_game_board(screen):
     pygame.draw.rect(screen, WHITE, (195, 100, 10, 300))
     pygame.draw.rect(screen, WHITE, (295, 100, 10, 300))
     pygame.draw.rect(screen, WHITE, (100, 195, 300, 10))
     pygame.draw.rect(screen, WHITE, (100, 295, 300, 10))
+
+
 
 # Setup the window that will be used to display the game
 def prepare_game_window():
@@ -312,6 +424,8 @@ def prepare_game_window():
     pygame.display.set_caption("Machine Learning Noughts and Crosses")
     return screen
 
+
+
 # Create a random RGB code to be used for the background colour
 def generate_random_colour():
     debug("Generating a random colour code")
@@ -320,6 +434,15 @@ def generate_random_colour():
     b = random.randint(0, 255)
     return [r, g, b]
 
+
+
+# Draw a new move on the game board
+#
+#  screen        :  The PyGame screen to draw the move on
+#  name_of_space :  Name of the space to draw the move on
+#                    e.g.    middle_right
+#  move          :  The move to draw.
+#                   It will be either "nought" or "cross"
 def draw_move(screen, name_of_space, move):
     debug("Drawing a move on the game board : %s in %s" % (move, name_of_space))
 
@@ -338,6 +461,14 @@ def draw_move(screen, name_of_space, move):
     pygame.display.update()
 
 
+
+# The user has clicked on the game board.
+# Which space did they click on?
+#
+#  mx : the x coordinate of their click
+#  my : the y coordiante of their click
+#
+#  Returns the name of the space they clicked on (e.g. "middle_right")
 def get_click_location(mx, my):
     debug("Getting location of click in %d,%d" % (mx, my))
     if 100 < mx < 400 and 100 < my < 400:
@@ -364,6 +495,19 @@ def get_click_location(mx, my):
                 return bottom_right
     return "none"
 
+
+
+# Handle a new move, by either the player or the computer
+#
+#  board         :  list of board spaces with the contents of each space
+#      e.g.  [ HUMAN, COMPUTER, HUMAN, EMPTY, EMPTY, HUMAN, COMPUTER, HUMAN, COMPUTER ]
+#  name_of_space :  name of the space the move was in
+#            e.g.    middle_right
+#  identity      :  whose move this is
+#            e.g.    HUMAN or COMPUTER
+#
+#  returns true if this move ended the game
+#  returns false if the game should keep going
 def game_move(screen, board, name_of_space, identity):
     debug("Processing a move for %s who chose %s" % (identity, name_of_space))
 
@@ -405,8 +549,21 @@ def let_computer_play(screen, board):
     print(computer_move)
     return game_move(screen, board, computer_move["class_name"], COMPUTER)
 
+
+
+
+############################################################################
+# Main game logic starts here
+############################################################################
+
 def debug(msg):
-    print(msg)
+    # if something isn't working, uncomment the line below
+    #  so you get detailed print-outs of everything that
+    #  the program is doing
+    # print(msg)
+    pass
+
+
 
 debug("Configuration")
 debug("Using identities %s %s %s" % (EMPTY, PLAYER, OPPONENT))
@@ -453,7 +610,11 @@ while running:
                 # the computer chooses where to play
                 gameover = let_computer_play(screen, board)
 
+        # ignore anything else the user clicked on while we
+        #  were processing their click, so they don't try to
+        #  sneakily have lots of moves at once
         pygame.event.clear()
 
 # explicitly quit pygame to ensure the app terminates correctly
+#  cf. https://www.pygame.org/wiki/FrequentlyAskedQuestions
 pygame.quit()
